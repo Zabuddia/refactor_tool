@@ -9,9 +9,14 @@ MARKER_RE = re.compile(r"<<<BEGIN FILE>>>\s*(.*?)\s*<<<END FILE>>>", re.DOTALL)
 
 SYSTEM_PROMPT = (
     "You are a careful C/C++ refactoring assistant. "
-    "Rewrite ONLY the provided *editable* file to use the Intel OneAPI IPP library and for clarity and safety without changing behavior. "
-    "Use the Intel OneAPI IPP library as much as possible and include <ipp.h> on every file where it makes sense. "
-    "Use the read-only files as context, but do not modify them. "
+    "Rewrite ONLY the provided *editable* file to modernize and improve clarity and safety, "
+    "using the Intel oneAPI IPP library wherever appropriate, without changing observable behavior. "
+    "When refactoring C files (with .c extension), you must write valid ISO C11 code — do NOT use C++ features such as 'nullptr' or references. "
+    "When refactoring C++ files (with .cpp extension), you may use modern C++17 style. "
+    "Include <ipp.h> in every file that calls IPP functions. "
+    "Prefer correct, in-place IPP functions such as ippsAddC_32f_I() or equivalent instead of incorrect names (e.g., ippsAddC_32F). "
+    "Do not invent functions that do not exist in the IPP API. "
+    "Do not modify read-only files; use them only for context. "
     "Return only the complete new file between <<<BEGIN FILE>>> and <<<END FILE>>>."
 )
 
@@ -27,8 +32,9 @@ def _call_llm(llm_cfg: Dict[str, str], filename: str, code: str, ro_context: str
     if llm_cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {llm_cfg['api_key']}"
 
+    file_hint = "C file (.c, use C11)" if filename.endswith(".c") else "C++17 file (.cpp)"
     user_content = (
-        f"Refactor the *editable* file below.\n"
+        f"Refactor the {file_hint} below\n"
         f"Use READ-ONLY files only for context.\n\n"
         f"=== READ-ONLY CONTEXT BEGIN ===\n{ro_context}\n=== READ-ONLY CONTEXT END ===\n\n"
         f"=== EDITABLE FILE: {filename} ===\n```\n{code}\n```\n\n"
