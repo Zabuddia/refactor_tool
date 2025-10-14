@@ -1,4 +1,3 @@
-import subprocess
 from __future__ import annotations
 from pathlib import Path
 from typing import List
@@ -6,6 +5,7 @@ from config import load_config
 from tools.cmake_lists import write_cmakelists
 from tools.cmake_presets import write_cmakepresets
 from tools.llm_refactor import refactor_with_context
+from tools.post_cmd import run_post_command
 
 def _rel_strings(paths: List[Path], base: Path) -> List[str]:
     out: List[str] = []
@@ -63,8 +63,7 @@ def main() -> None:
     if post["enable"]:
         post_cmd = conf["post"]["command"]
         if post_cmd:
-            print(f"[post] running in {code_dir}: {post_cmd}")
-            rc = subprocess.call(post_cmd, shell=True, cwd=str(code_dir))
+            rc = run_post_command(post_cmd, code_dir)
             print(f"[post] exit code: {rc}")
 
     print("Done.")
