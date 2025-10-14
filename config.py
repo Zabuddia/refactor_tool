@@ -95,8 +95,9 @@ def load_config() -> Dict[str, Any]:
 
     return {
         "project": {"name": project_name, "code_dir": code_dir},
-        "cmakelists": cmakelists,
-        "cmakepresets": cmakepresets,
-        "llm": llm_cfg,
-        "post": post_cfg,
+        "cmakelists": { **cmakelists },
+        "cmakepresets": { **cmakepresets },
+        "llm": { **llm_cfg },
+        "post": { **post_cfg },
+        "helpers": {"expand_globs": _expand_globs},
     }
