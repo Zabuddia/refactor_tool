@@ -1,0 +1,4 @@
+__pycache__
+project.conf
+llm_log.txt
+shell.nix
