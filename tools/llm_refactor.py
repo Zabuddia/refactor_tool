@@ -9,7 +9,8 @@ MARKER_RE = re.compile(r"<<<BEGIN FILE>>>\s*(.*?)\s*<<<END FILE>>>", re.DOTALL)
 
 SYSTEM_PROMPT = (
     "You are a careful C/C++ refactoring assistant. "
-    "Rewrite ONLY the provided *editable* file for clarity and safety without changing behavior. "
+    "Rewrite ONLY the provided *editable* file to use the Intel OneAPI IPP library and for clarity and safety without changing behavior. "
+    "Use the Intel OneAPI IPP library as much as possible and include <ipp.h> on every file where it makes sense. "
     "Use the read-only files as context, but do not modify them. "
     "Return only the complete new file between <<<BEGIN FILE>>> and <<<END FILE>>>."
 )
