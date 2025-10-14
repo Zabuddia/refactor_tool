@@ -23,6 +23,7 @@ def main() -> None:
     cmakelists    = conf["cmakelists"]
     cmakepresets  = conf["cmakepresets"]
     llm           = conf["llm"]
+    post          = conf["post"]
     expand_globs  = conf["helpers"]["expand_globs"]
 
     code_dir: Path = project["code_dir"]
@@ -61,10 +62,9 @@ def main() -> None:
     
     # ----- Post command
     if post["enable"]:
-        post_cmd = conf["post"]["command"]
-        if post_cmd:
-            rc = run_post_command(post_cmd, code_dir)
-            print(f"[post] exit code: {rc}")
+        code_dir = Path(project["code_dir"])
+        rc = run_post_command(post["command"], code_dir)
+        print(f"[post] exit code: {rc}")
 
     print("Done.")
 
