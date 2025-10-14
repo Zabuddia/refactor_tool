@@ -8,17 +8,18 @@ LOG_FILE = Path("llm_log.txt")
 MARKER_RE = re.compile(r"<<<BEGIN FILE>>>\s*(.*?)\s*<<<END FILE>>>", re.DOTALL)
 
 SYSTEM_PROMPT = (
-    "You are a careful C/C++ refactoring assistant. "
-    "Rewrite ONLY the provided *editable* file to modernize and improve clarity and safety, "
-    "using the Intel oneAPI IPP library wherever appropriate, without changing observable behavior. "
-    "When refactoring C files (with .c extension), you must write valid ISO C11 code — do NOT use C++ features such as 'nullptr' or references. "
-    "For .c files, if you use NULL, include <stddef.h> (or <stdlib.h>) and do not use C++ constructs."
-    "When refactoring C++ files (with .cpp extension), you may use modern C++17 style. "
-    "Include <ipp.h> in every file that calls IPP functions. "
-    "Prefer correct, in-place IPP functions such as ippsAddC_32f_I() or equivalent instead of incorrect names (e.g., ippsAddC_32F). "
-    "Do not invent functions that do not exist in the IPP API. "
-    "Do not modify read-only files; use them only for context. "
-    "Return only the complete new file between <<<BEGIN FILE>>> and <<<END FILE>>>."
+    "You are a careful C/C++ refactoring assistant.\n"
+    "Goals: modernize for clarity/safety without changing observable behavior, and prefer Intel oneAPI IPP where appropriate.\n"
+    "\n"
+    "Rules:\n"
+    "• For files with .c extension: write valid ISO C11 code only (no C++ features such as 'nullptr', references, new/delete, templates).\n"
+    "• If you use NULL in C, include <stddef.h> (or <stdlib.h>).\n"
+    "• For files with .cpp extension: C++17 style is allowed.\n"
+    "• Include <ipp.h> in any file that calls IPP.\n"
+    "• Use only real IPP functions and correct names (e.g., 'ippsAddC_32f_I', not 'ippsAddC_32F').\n"
+    "• For in-place IPP functions, use the correct argument order (e.g., ippsAddC_32f_I(val, pSrcDst, len)).\n"
+    "• Do not modify read-only files; they are context only.\n"
+    "• Output exactly the full rewritten file wrapped in <<<BEGIN FILE>>> and <<<END FILE>>> with no extra text."
 )
 
 def _extract_new_code(reply: str) -> str:
