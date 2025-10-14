@@ -12,6 +12,7 @@ SYSTEM_PROMPT = (
     "Rewrite ONLY the provided *editable* file to modernize and improve clarity and safety, "
     "using the Intel oneAPI IPP library wherever appropriate, without changing observable behavior. "
     "When refactoring C files (with .c extension), you must write valid ISO C11 code — do NOT use C++ features such as 'nullptr' or references. "
+    "For .c files, if you use NULL, include <stddef.h> (or <stdlib.h>) and do not use C++ constructs."
     "When refactoring C++ files (with .cpp extension), you may use modern C++17 style. "
     "Include <ipp.h> in every file that calls IPP functions. "
     "Prefer correct, in-place IPP functions such as ippsAddC_32f_I() or equivalent instead of incorrect names (e.g., ippsAddC_32F). "
