@@ -1,3 +1,4 @@
+import subprocess
 from __future__ import annotations
 from pathlib import Path
 from typing import List
@@ -57,6 +58,14 @@ def main() -> None:
             )
         else:
             print("[llm] no editable_files listed; skipping refactor")
+    
+    # ----- Post command
+    if post["enable"]:
+        post_cmd = conf["post"]["command"]
+        if post_cmd:
+            print(f"[post] running in {code_dir}: {post_cmd}")
+            rc = subprocess.call(post_cmd, shell=True, cwd=str(code_dir))
+            print(f"[post] exit code: {rc}")
 
     print("Done.")
 

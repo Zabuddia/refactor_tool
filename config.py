@@ -84,15 +84,16 @@ def load_config() -> Dict[str, Any]:
     if llm_cfg["enable"] and not llm_cfg["model"]:
         die("llm.model is empty")
 
+    # ---- [post] (optional)
+    post_cmd = ""
+    if "post" in cfg:
+        post_cmd = cfg["post"].get("command", "").strip()
+
     return {
-        "project": {
-            "name": project_name,
-            "code_dir": code_dir,
-        },
+        "project": {"name": project_name, "code_dir": code_dir},
         "cmakelists": { **cmakelists },
         "cmakepresets": { **cmakepresets },
         "llm": { **llm_cfg },
-        "helpers": {
-            "expand_globs": _expand_globs,  # use this with base=project['code_dir']
-        },
+        "post": {"command": post_cmd},
+        "helpers": {"expand_globs": _expand_globs},
     }
