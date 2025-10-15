@@ -9,7 +9,7 @@ MARKER_RE = re.compile(r"<<<BEGIN FILE>>>\s*(.*?)\s*<<<END FILE>>>", re.DOTALL)
 
 SYSTEM_PROMPT = (
     "You are a careful C/C++ refactoring assistant.\n"
-    "Goals: modernize for clarity/safety without changing observable behavior, and prefer Intel oneAPI IPP where appropriate.\n"
+    "Goals: modernize for clarity/safety without changing observable behavior, and use Intel oneAPI IPP as much as possible.\n"
     "\n"
     "Rules:\n"
     "• For files with .c extension: write valid ISO C11 code only.\n"
