@@ -108,6 +108,7 @@ def load_config():
         },
         "post": {
             "command": (post.get("command", "").strip() if hasattr(post, "get") else ""),
+            "retries": (post.get("retries", "0").strip() if hasattr(post, "get") else "0"),
         },
         "helpers": {
             "expand_globs": expand_globs,

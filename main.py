@@ -4,7 +4,7 @@ from config import load_config
 from tools.cmakelists_tool import write_cmakelists
 from tools.cmakepresets_tool import write_cmakepresets
 from tools.llm_refactor_tool import refactor_with_context
-from tools.post_cmd_tool import run_post_command
+from tools.post_cmd_tool import run_post_with_llm_retry
 
 def _rel_strings(paths, base):
     out = []
@@ -84,9 +84,17 @@ def main():
     # ---- Post command (only runs if LLM succeeded or was skipped)
     if "post" not in args.skip:
         cmd = post.get("command", "")
+        retries = int(str(post.get("retries", 0) or 0))
         if cmd:
-            rc = run_post_command(cmd, code_dir)
-            print(f"[post] exit code: {rc}")
+            rc = run_post_with_llm_retry(
+                command=cmd,
+                code_dir=code_dir,
+                retries=retries,
+                llm=llm,  # pass the whole llm dict; function will auto-disable retries if missing
+                refactor_fn=refactor_with_context,
+            )
+            # If you want the simple non-retry path logged even when retries==0, it's already logged inside.
+            print(f"[post] final exit code: {rc}")
 
     print("Done.")
 
