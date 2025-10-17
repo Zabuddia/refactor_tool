@@ -1,4 +1,4 @@
-import configparser, glob, sys
+import configparser, glob, sys, json
 from pathlib import Path
 
 CONF_FILE = "project.conf"
@@ -22,6 +22,27 @@ def expand_globs(patterns, base):
                 seen.add(k)
                 out.append(p)
     return out
+
+def _auto_cast(v):
+    if isinstance(v, (int, float, bool)) or v is None:
+        return v
+    s = (v or "").strip()
+    lo = s.lower()
+    if lo in ("true", "false"):
+        return lo == "true"
+    if lo in ("null", "none"):
+        return None
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            return json.loads(s)
+        except Exception:
+            return s
+    try:
+        if "." in s:
+            return float(s)
+        return int(s)
+    except Exception:
+        return s
 
 def load_config():
     if not Path(CONF_FILE).exists():
@@ -47,11 +68,18 @@ def load_config():
     llm = cfg["llm"] if "llm" in cfg else {}
     post = cfg["post"] if "post" in cfg else {}
 
-    c_files_raw  = (cmk.get("c_files", "").strip() if hasattr(cmk, "get") else "")
-    cpp_files_raw= (cmk.get("cpp_files", "").strip() if hasattr(cmk, "get") else "")
+    c_files_raw   = (cmk.get("c_files", "").strip() if hasattr(cmk, "get") else "")
+    cpp_files_raw = (cmk.get("cpp_files", "").strip() if hasattr(cmk, "get") else "")
 
     ro_raw   = (llm.get("read_only_files", "").strip() if hasattr(llm, "get") else "")
     edit_raw = (llm.get("editable_files", "").strip()   if hasattr(llm, "get") else "")
+
+    known_llm_keys = {"base_url", "api_key", "model", "read_only_files", "editable_files"}
+    llm_params = {}
+    if hasattr(llm, "items"):
+        for k, v in llm.items():
+            if k not in known_llm_keys:
+                llm_params[k] = _auto_cast(v)
 
     result = {
         "project": {
@@ -76,6 +104,7 @@ def load_config():
             "editable_files":  expand_list(edit_raw),
             "read_only_expanded": expand_globs(ro_raw, code_dir),
             "editable_expanded":  expand_globs(edit_raw, code_dir),
+            "params": llm_params,
         },
         "post": {
             "command": (post.get("command", "").strip() if hasattr(post, "get") else ""),

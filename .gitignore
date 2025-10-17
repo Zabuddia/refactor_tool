@@ -1,4 +1,4 @@
 __pycache__
 project.conf
-llm_log.txt
+log/
 shell.nix

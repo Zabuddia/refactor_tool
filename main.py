@@ -23,14 +23,6 @@ def main():
                     help="Skip one or more steps")
     args = ap.parse_args()
 
-    # load_config() already reads from project.conf; quick override:
-    global CONF_FILE
-    try:
-        from config import CONF_FILE as _CONF_FILE
-        CONF_FILE = _CONF_FILE
-    except Exception:
-        pass
-    # monkey-patch the module variable for this process
     import config
     config.CONF_FILE = args.config
 
@@ -43,6 +35,7 @@ def main():
 
     code_dir = Path(project["code_dir"])
 
+    # ---- CMakeLists
     if "cmakelists" not in args.skip:
         c_abs   = cmakelists.get("c_files_expanded", [])
         cpp_abs = cmakelists.get("cpp_files_expanded", [])
@@ -54,29 +47,41 @@ def main():
                 output=str(code_dir / "CMakeLists.txt"),
             )
 
+    # ---- Presets
     if "presets" not in args.skip:
         write_cmakepresets(
             selected_presets=cmakepresets.get("presets", []),
             output=str(code_dir / cmakepresets.get("output", "CMakePresets.json")),
         )
 
+    # ---- LLM (only fail-fast step)
     if "llm" not in args.skip:
         ro_abs = llm.get("read_only_expanded", [])
         ed_abs = llm.get("editable_expanded", [])
         if ed_abs:
-            refactor_with_context(
-                cfg={
-                    "base_url": llm.get("base_url", ""),
-                    "api_key":  llm.get("api_key", ""),
-                    "model":    llm.get("model", ""),
-                    "log": True,
-                },
-                editable_files=ed_abs,
-                read_only_files=ro_abs,
-            )
+            try:
+                ok = refactor_with_context(
+                    cfg={
+                        "base_url": llm.get("base_url", ""),
+                        "api_key":  llm.get("api_key", ""),
+                        "model":    llm.get("model", ""),
+                        "log": True,
+                        "params": llm.get("params", {}),
+                    },
+                    editable_files=ed_abs,
+                    read_only_files=ro_abs,
+                )
+                if not ok:
+                    print("[llm] refactor failed — aborting remaining steps.")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"[llm] failed: {e}")
+                print("[llm] aborting remaining steps.")
+                sys.exit(1)
         else:
             print("[llm] no editable files; skipping refactor")
 
+    # ---- Post command (only runs if LLM succeeded or was skipped)
     if "post" not in args.skip:
         cmd = post.get("command", "")
         if cmd:

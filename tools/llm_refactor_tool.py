@@ -1,12 +1,32 @@
-import re, requests, datetime, sys
+import re, requests, datetime, sys, json
 from pathlib import Path
 
-LOG_FILE = Path("llm_log.txt")
+LOG_FILE = Path("log/llm_log.txt")
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 MARKER_RE = re.compile(r"<<<BEGIN FILE>>>\s*(.*?)\s*<<<END FILE>>>", re.DOTALL)
+
+# Common chat params you can set under [llm] -> params in project.conf.
+# Only 'model' and 'messages' are reserved by the payload builder.
+POSSIBLE_PARAMS = (
+    # sampling / output control
+    "temperature", "top_p", "max_tokens", "n", "stop", "seed",
+    # penalties
+    "presence_penalty", "frequency_penalty",
+    # log probs (where supported)
+    "logprobs", "top_logprobs",
+    # response shaping / structured output
+    "response_format",  # e.g. {"type":"json_object"} if you switch parsers later
+    # tool use (if your backend supports it)
+    "tools", "tool_choice", "parallel_tool_calls",
+    # logits controls (provider-specific; pass-through)
+    "logit_bias",
+    # metadata/user (auditing/rate-limits)
+    "user", "metadata",
+)
 
 SYSTEM_PROMPT = (
     "You are a careful C/C++ refactoring assistant.\n"
-    "Goals: modernize for clarity/safety without changing observable behavior, and use Intel oneAPI IPP as much as possible.\n"
+    # "Goals: modernize for clarity/safety without changing observable behavior, and use Intel oneAPI IPP as much as possible.\n"
     "\n"
     "Rules:\n"
     "• For files with .c extension: write valid ISO C11 code only.\n"
@@ -63,12 +83,33 @@ def _log_conversation(filename, prompt, reply):
         f.write("=" * 60 + "\n")
 
 def _call_llm(cfg, filename, code, ro_context):
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    base_url = cfg["base_url"].rstrip("/")
     headers = {"Content-Type": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
 
+    # --- Ping the server first ---
+    try:
+        ping_url = base_url + "/models"
+        ping_resp = requests.get(ping_url, headers=headers, timeout=10)
+        ping_resp.raise_for_status()
+        print("[llm] connected to server, llm is writing...")
+    except Exception as e:
+        raise RuntimeError(f"[llm] failed to connect to server at {base_url}: {e}")
+
+    # --- Now build and send the actual chat completion ---
+    url = base_url + "/chat/completions"
     prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
+
+    params = cfg.get("params", {})
+    if params:
+        for k, v in params.items():
+            if k not in ("model", "messages") and v is not None:
+                payload[k] = v
+
+    # print("[llm] sending payload:")
+    # print(json.dumps(payload, indent=2))
+
     r = requests.post(url, headers=headers, json=payload, timeout=120)
     r.raise_for_status()
     data = r.json()
@@ -81,10 +122,12 @@ def _call_llm(cfg, filename, code, ro_context):
 
 def refactor_with_context(cfg, editable_files, read_only_files):
     ro_context = _make_ro_context(read_only_files)
+    had_error = False
     for fp in editable_files:
         p = Path(fp)
         if not p.exists():
             print(f"[llm] skip missing editable: {p}")
+            had_error = True
             continue
         print(f"[llm] refactor -> {p}")
         original = p.read_text(encoding="utf-8", errors="ignore")
@@ -92,9 +135,11 @@ def refactor_with_context(cfg, editable_files, read_only_files):
             new_text = _call_llm(cfg, p.name, original, ro_context)
         except Exception as e:
             print(f"[llm] error on {p}: {e}")
-            continue
+            had_error = True
+            break  # fail-fast within the LLM step
         p.write_text(new_text, encoding="utf-8")
         print(f"[llm] wrote -> {p}")
+    return not had_error
 
 if __name__ == "__main__":
     import argparse
