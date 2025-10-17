@@ -1,9 +1,7 @@
-from __future__ import annotations
 from pathlib import Path
-from typing import Iterable
 from io import StringIO
 
-def _block_set(var: str, items: Iterable[str]) -> str:
+def _block_set(var, items):
     items = [Path(p).as_posix() for p in items]
     buf = StringIO()
     buf.write(f"set({var}\n")
@@ -12,12 +10,7 @@ def _block_set(var: str, items: Iterable[str]) -> str:
     buf.write(")\n\n")
     return buf.getvalue()
 
-def write_cmakelists(
-    project_name: str,
-    c_files: Iterable[str],
-    cpp_files: Iterable[str],
-    output: str = "CMakeLists.txt",
-) -> None:
+def generate_cmakelists(project_name, c_files, cpp_files):
     out = StringIO()
 
     # Header & options
@@ -33,12 +26,12 @@ def write_cmakelists(
         "set(CMAKE_CXX_STANDARD 17)\n"
         "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
         "set(CMAKE_CXX_EXTENSIONS OFF)\n\n"
-        'option(BUILD_TESTING                "Enable CTest & test targets"              ON)\n'
-        'option(ENABLE_WARNINGS_AS_ERRORS    "Treat warnings as errors for *your* code" OFF)\n'
-        'option(ENABLE_IPP                   "Link Intel oneAPI IPP if found"           ON)\n'
-        'option(ENABLE_LTO                   "Enable link-time optimization (IPO)"      OFF)\n'
-        'option(ENABLE_ASAN_UBSAN            "Enable ASan+UBSan on non-MSVC Debug"      OFF)\n'
-        'option(ENABLE_COVERAGE              "Enable coverage flags on GNU/Clang"       OFF)\n\n'
+        "option(BUILD_TESTING                \"Enable CTest & test targets\"              ON)\n"
+        "option(ENABLE_WARNINGS_AS_ERRORS    \"Treat warnings as errors for *your* code\" OFF)\n"
+        "option(ENABLE_IPP                   \"Link Intel oneAPI IPP if found\"           ON)\n"
+        "option(ENABLE_LTO                   \"Enable link-time optimization (IPO)\"      OFF)\n"
+        "option(ENABLE_ASAN_UBSAN            \"Enable ASan+UBSan on non-MSVC Debug\"      OFF)\n"
+        "option(ENABLE_COVERAGE              \"Enable coverage flags on GNU/Clang\"       OFF)\n\n"
         f"set(MAIN_TARGET {project_name}-test)\n\n"
     )
 
@@ -154,5 +147,18 @@ def write_cmakelists(
         "endif()\n"
     )
 
-    Path(output).write_text(out.getvalue(), encoding="utf-8")
+    return out.getvalue()
+
+def write_cmakelists(project_name, c_files, cpp_files, output="CMakeLists.txt"):
+    text = generate_cmakelists(project_name, c_files, cpp_files)
+    Path(output).write_text(text, encoding="utf-8")
     print(f"[cmake] wrote -> {output}")
+
+if __name__ == "__main__":
+    import argparse, shlex
+    p = argparse.ArgumentParser(description="Generate CMakeLists.txt")
+    p.add_argument("--project", required=True, help="Project name (used for MAIN_TARGET prefix)")
+    p.add_argument("--c", nargs="*", default=[], help="C source files")
+    p.add_argument("--cpp", nargs="*", default=[], help="C++ source files")
+    args = p.parse_args()
+    write_cmakelists(args.project, args.c, args.cpp)

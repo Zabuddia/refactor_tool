@@ -1,10 +1,7 @@
-from __future__ import annotations
 import json
 from pathlib import Path
-from typing import Dict, List, Any, Set
 
-# Master template (full superset); we’ll prune based on selected names.
-def _master_template() -> Dict[str, Any]:
+def _master_template():
     return {
       "version": 6,
       "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
@@ -147,27 +144,22 @@ def _master_template() -> Dict[str, Any]:
       ]
     }
 
-def _prune_presets(doc: Dict[str, Any], selected: List[str]) -> Dict[str, Any]:
-    """
-    Keep only the selected configure preset names. Build/test/workflow entries are
-    filtered to those whose referenced preset names remain valid. Hidden bases
-    (base/linux-base/win-base) are auto-kept if they are inherited by any kept preset.
-    If selected is empty -> keep everything.
-    """
+def _prune_presets(doc, selected):
+    # If none selected, keep everything.
     if not selected:
         return doc
 
-    sel: Set[str] = set(selected)
+    sel = set(selected)
 
-    # 1) Configure presets: keep selected + their inheritance chain (base nodes).
-    name_to_cfg = {p["name"]: p for p in doc.get("configurePresets", [])}
-    keep_cfg: Set[str] = set()
+    # 1) Configure presets: keep selected + inheritance chain.
+    cfgs = {p["name"]: p for p in doc.get("configurePresets", [])}
+    keep_cfg = set()
 
-    def mark_chain(name: str):
-        if name in keep_cfg or name not in name_to_cfg:
+    def mark_chain(name):
+        if name in keep_cfg or name not in cfgs:
             return
         keep_cfg.add(name)
-        inherits = name_to_cfg[name].get("inherits")
+        inherits = cfgs[name].get("inherits")
         if isinstance(inherits, str):
             for parent in inherits.split(";"):
                 mark_chain(parent.strip())
@@ -180,37 +172,39 @@ def _prune_presets(doc: Dict[str, Any], selected: List[str]) -> Dict[str, Any]:
 
     doc["configurePresets"] = [p for p in doc.get("configurePresets", []) if p["name"] in keep_cfg]
 
-    # 2) Build presets: keep if configurePreset in selected set
-    doc["buildPresets"] = [
-        p for p in doc.get("buildPresets", [])
-        if p.get("configurePreset") in sel
-    ]
+    # 2) Build presets: keep if configurePreset is in selected set.
+    doc["buildPresets"] = [p for p in doc.get("buildPresets", []) if p.get("configurePreset") in sel]
 
-    # 3) Test presets: same filter
-    doc["testPresets"] = [
-        p for p in doc.get("testPresets", [])
-        if p.get("configurePreset") in sel
-    ]
+    # 3) Test presets: same idea.
+    doc["testPresets"] = [p for p in doc.get("testPresets", []) if p.get("configurePreset") in sel]
 
-    # 4) Workflows: keep only those whose steps all reference available items
-    valid_step_names = set()
-    valid_step_names.update(p["name"] for p in doc["buildPresets"])
-    valid_step_names.update(p["name"] for p in doc["testPresets"])
-    valid_step_names.update(keep_cfg)  # configure preset names are valid configure step names
+    # 4) Workflows: steps must all reference valid items.
+    valid = set()
+    valid.update(p["name"] for p in doc["buildPresets"])
+    valid.update(p["name"] for p in doc["testPresets"])
+    valid.update(keep_cfg)  # configure step names
 
-    pruned_workflows = []
+    pruned_wf = []
     for wf in doc.get("workflowPresets", []):
         steps = wf.get("steps", [])
-        if steps and all(step.get("name") in valid_step_names for step in steps):
-            pruned_workflows.append(wf)
-    doc["workflowPresets"] = pruned_workflows
+        if steps and all(step.get("name") in valid for step in steps):
+            pruned_wf.append(wf)
+    doc["workflowPresets"] = pruned_wf
 
     return doc
 
-def write_cmakepresets(selected_presets: List[str], output: str = "CMakePresets.json") -> None:
+def write_cmakepresets(selected_presets, output="CMakePresets.json"):
     doc = _master_template()
     doc = _prune_presets(doc, selected_presets)
-    # Ensure output directory exists (in case a full path is provided)
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(doc, indent=2), encoding="utf-8")
-    print(f"[presets] wrote -> {output} ({'all' if not selected_presets else ','.join(selected_presets)})")
+    human = "all" if not selected_presets else ",".join(selected_presets)
+    print(f"[presets] wrote -> {output} ({human})")
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(description="Generate CMakePresets.json (optionally pruned).")
+    p.add_argument("--keep", nargs="*", default=[], help="Configure presets to keep (if empty, keep all).")
+    p.add_argument("--out", default="CMakePresets.json", help="Output path")
+    args = p.parse_args()
+    write_cmakepresets(args.keep, args.out)
