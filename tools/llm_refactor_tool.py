@@ -16,7 +16,7 @@ POSSIBLE_PARAMS = (
     # log probs (where supported)
     "logprobs", "top_logprobs",
     # response shaping / structured output
-    "response_format",  # e.g. {"type":"json_object"} if you switch parsers later
+    "response_format",
     # tool use (if your backend supports it)
     "tools", "tool_choice", "parallel_tool_calls",
     # logits controls (provider-specific; pass-through)
@@ -67,9 +67,36 @@ def _build_request(model, filename, code, ro_context):
     }
     return user_content, payload
 
+# --- minimal additions for multi-file per chunk ---
+
+def _build_request_multi(model, file_names, codes, ro_context):
+    parts = ["Refactor the following files. Use READ-ONLY files only for context.\n"]
+    parts.append(f"=== READ-ONLY CONTEXT BEGIN ===\n{ro_context}\n=== READ-ONLY CONTEXT END ===\n")
+    for fn, code in zip(file_names, codes):
+        file_hint = "C file (.c, use C11)" if str(fn).endswith(".c") else "C++17 file (.cpp)"
+        parts.append(f"\n=== EDITABLE FILE: {fn} ({file_hint}) ===\n```\n{code}\n```")
+    parts.append(
+        "\nOutput format:\n"
+        "For EACH input file, in the SAME ORDER, output:\n"
+        "<<<BEGIN FILE>>>\n<entire rewritten file for that input>\n<<<END FILE>>>\n"
+        "Repeat once per input file."
+    )
+    user_content = "\n".join(parts)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT + "Output one BEGIN/END block per input file, in order."},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    return user_content, payload
+
 def _parse_reply(reply_text):
     m = re.search(MARKER_RE, reply_text or "")
     return m.group(1).strip() if m else (reply_text or "").strip()
+
+def _parse_many(reply_text):
+    return [m.group(1).strip() for m in MARKER_RE.finditer(reply_text or "")]
 
 def _make_ro_context(read_only_files):
     chunks = []
@@ -102,13 +129,11 @@ def _iter_chunks(items, size):
     for i in range(0, len(items), size):
         yield items[i:i+size]
 
-def _call_llm(cfg, filename, code, ro_context):
+def _post_and_extract(cfg, payload, prompt_for_log, log_name):
     base_url = cfg["base_url"].rstrip("/")
     headers = {"Content-Type": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
-
-    # --- Ping the server first ---
     try:
         ping_url = base_url + "/models"
         ping_resp = requests.get(ping_url, headers=headers, timeout=10)
@@ -117,24 +142,18 @@ def _call_llm(cfg, filename, code, ro_context):
     except Exception as e:
         raise RuntimeError(f"[llm] failed to connect to server at {base_url}: {e}")
 
-    # --- Build payload ---
-    url = base_url + "/chat/completions"
-    prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
-
-    # Optionally remove JSON mode unless you *really* want it.
+    # merge params (no clobber of required keys)
     if not cfg.get("force_json_mode", False):
         rf = payload.get("response_format")
         if isinstance(rf, dict) and rf.get("type") == "json_object":
             payload.pop("response_format", None)
-
-    # Merge custom params (but don't clobber required keys)
     params = cfg.get("params", {})
     if params:
         for k, v in params.items():
             if k not in ("model", "messages") and v is not None:
                 payload[k] = v
 
-    # --- POST and parse robustly ---
+    url = base_url + "/chat/completions"
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=120)
     except requests.RequestException as e:
@@ -151,7 +170,6 @@ def _call_llm(cfg, filename, code, ro_context):
         body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
         raise RuntimeError(f"[llm] JSON decode error: {e}\nContent-Type: {ct}\nBody(head):\n{body_head}")
 
-    # --- Defensive extraction of content ---
     choices = data.get("choices")
     if not choices or not isinstance(choices, list):
         raise RuntimeError(f"[llm] No 'choices' in response. Head: {str(data)[:400]}")
@@ -161,36 +179,62 @@ def _call_llm(cfg, filename, code, ro_context):
         raise RuntimeError(f"[llm] Empty content. Head: {str(data)[:400]}")
 
     if cfg.get("log", True):
-        _log_conversation(str(filename), prompt_for_log, reply)
+        _log_conversation(log_name, prompt_for_log, reply)
+    return reply
 
+def _call_llm(cfg, filename, code, ro_context):
+    prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
+    reply = _post_and_extract(cfg, payload, prompt_for_log, str(filename))
     return _parse_reply(reply)
+
+def _call_llm_multi(cfg, file_names, codes, ro_context):
+    prompt_for_log, payload = _build_request_multi(cfg["model"], file_names, codes, ro_context)
+    log_name = ", ".join(file_names)
+    reply = _post_and_extract(cfg, payload, prompt_for_log, log_name)
+    blocks = _parse_many(reply)
+    if len(blocks) != len(file_names):
+        raise RuntimeError(f"[llm] Expected {len(file_names)} output blocks, got {len(blocks)}.")
+    return blocks
 
 def refactor_with_context(cfg, editable_files, read_only_files):
     ro_context = _make_ro_context(read_only_files)
     had_error = False
-    chunk_size = cfg.get("chunk_size", 1)
+    chunk_size = max(int(cfg.get("chunk_size", 1) or 1), 1)
 
     files = list(editable_files)
     for ci, group in enumerate(_iter_chunks(files, chunk_size), 1):
         print(f"[llm] chunk {ci} ({len(group)} file(s))")
+
+        file_paths, file_names, codes = [], [], []
         for fp in group:
             p = Path(fp)
             if not p.exists():
                 print(f"[llm] skip missing editable: {p}")
                 had_error = True
                 continue
-            print(f"[llm] refactor -> {p}")
-            original = p.read_text(encoding="utf-8", errors="ignore")
-            try:
-                new_text = _call_llm(cfg, p.name, original, ro_context)
-            except Exception as e:
-                print(f"[llm] error on {p}: {e}")
-                had_error = True
-                break  # fail-fast within the LLM step
+            file_paths.append(p)
+            file_names.append(p.name)
+            codes.append(p.read_text(encoding="utf-8", errors="ignore"))
+
+        if not file_paths:
+            continue
+
+        try:
+            if len(file_paths) == 1:
+                new_texts = [_call_llm(cfg, file_names[0], codes[0], ro_context)]
+            else:
+                new_texts = _call_llm_multi(cfg, file_names, codes, ro_context)
+        except Exception as e:
+            print(f"[llm] error in chunk {ci}: {e}")
+            had_error = True
+            break
+
+        for p, new_text in zip(file_paths, new_texts):
             p.write_text(new_text, encoding="utf-8")
             print(f"[llm] wrote -> {p}")
+
         if had_error:
-            break  # stop after a failed file in any chunk
+            break
     return not had_error
 
 if __name__ == "__main__":
