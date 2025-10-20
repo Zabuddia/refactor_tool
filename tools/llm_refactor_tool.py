@@ -1,5 +1,6 @@
 import re, requests, datetime, sys, json
 from pathlib import Path
+from json import JSONDecodeError
 
 LOG_FILE = Path("log/llm_log.txt")
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -98,23 +99,48 @@ def _call_llm(cfg, filename, code, ro_context):
     except Exception as e:
         raise RuntimeError(f"[llm] failed to connect to server at {base_url}: {e}")
 
-    # --- Now build and send the actual chat completion ---
+    # --- Build payload ---
     url = base_url + "/chat/completions"
     prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
 
+    # Optionally remove JSON mode unless you *really* want it.
+    if not cfg.get("force_json_mode", False):
+        rf = payload.get("response_format")
+        if isinstance(rf, dict) and rf.get("type") == "json_object":
+            payload.pop("response_format", None)
+
+    # Merge custom params (but don't clobber required keys)
     params = cfg.get("params", {})
     if params:
         for k, v in params.items():
             if k not in ("model", "messages") and v is not None:
                 payload[k] = v
 
-    # print("[llm] sending payload:")
-    # print(json.dumps(payload, indent=2))
+    # --- POST and parse robustly ---
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=120)
+    except requests.RequestException as e:
+        raise RuntimeError(f"[llm] POST error: {e}")
 
-    r = requests.post(url, headers=headers, json=payload, timeout=120)
-    r.raise_for_status()
-    data = r.json()
-    reply = data["choices"][0]["message"]["content"]
+    ct = r.headers.get("Content-Type", "")
+    if not r.ok:
+        body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
+        raise RuntimeError(f"[llm] HTTP {r.status_code} {ct}\n{body_head}")
+
+    try:
+        data = r.json()
+    except JSONDecodeError as e:
+        body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
+        raise RuntimeError(f"[llm] JSON decode error: {e}\nContent-Type: {ct}\nBody(head):\n{body_head}")
+
+    # --- Defensive extraction of content ---
+    choices = data.get("choices")
+    if not choices or not isinstance(choices, list):
+        raise RuntimeError(f"[llm] No 'choices' in response. Head: {str(data)[:400]}")
+    msg = choices[0].get("message") or {}
+    reply = msg.get("content")
+    if not reply:
+        raise RuntimeError(f"[llm] Empty content. Head: {str(data)[:400]}")
 
     if cfg.get("log", True):
         _log_conversation(str(filename), prompt_for_log, reply)
