@@ -97,6 +97,11 @@ def _log_conversation(filename, prompt, reply):
         f.write((reply or "").strip() + "\n")
         f.write("=" * 60 + "\n")
 
+def _iter_chunks(items, size):
+    size = max(int(size or 1), 1)
+    for i in range(0, len(items), size):
+        yield items[i:i+size]
+
 def _call_llm(cfg, filename, code, ro_context):
     base_url = cfg["base_url"].rstrip("/")
     headers = {"Content-Type": "application/json"}
@@ -163,22 +168,29 @@ def _call_llm(cfg, filename, code, ro_context):
 def refactor_with_context(cfg, editable_files, read_only_files):
     ro_context = _make_ro_context(read_only_files)
     had_error = False
-    for fp in editable_files:
-        p = Path(fp)
-        if not p.exists():
-            print(f"[llm] skip missing editable: {p}")
-            had_error = True
-            continue
-        print(f"[llm] refactor -> {p}")
-        original = p.read_text(encoding="utf-8", errors="ignore")
-        try:
-            new_text = _call_llm(cfg, p.name, original, ro_context)
-        except Exception as e:
-            print(f"[llm] error on {p}: {e}")
-            had_error = True
-            break  # fail-fast within the LLM step
-        p.write_text(new_text, encoding="utf-8")
-        print(f"[llm] wrote -> {p}")
+    chunk_size = cfg.get("chunk_size", 1)
+
+    files = list(editable_files)
+    for ci, group in enumerate(_iter_chunks(files, chunk_size), 1):
+        print(f"[llm] chunk {ci} ({len(group)} file(s))")
+        for fp in group:
+            p = Path(fp)
+            if not p.exists():
+                print(f"[llm] skip missing editable: {p}")
+                had_error = True
+                continue
+            print(f"[llm] refactor -> {p}")
+            original = p.read_text(encoding="utf-8", errors="ignore")
+            try:
+                new_text = _call_llm(cfg, p.name, original, ro_context)
+            except Exception as e:
+                print(f"[llm] error on {p}: {e}")
+                had_error = True
+                break  # fail-fast within the LLM step
+            p.write_text(new_text, encoding="utf-8")
+            print(f"[llm] wrote -> {p}")
+        if had_error:
+            break  # stop after a failed file in any chunk
     return not had_error
 
 if __name__ == "__main__":
@@ -190,6 +202,7 @@ if __name__ == "__main__":
     p.add_argument("--no-log",    action="store_true", help="Disable conversation logging")
     p.add_argument("--ro",        nargs="*", default=[], help="Read-only context files")
     p.add_argument("--edit",      nargs="+",           help="Editable files to rewrite")
+    p.add_argument("--chunk-size", type=int, default=1, help="Number of files to process per chunk (default: 1)")
     args = p.parse_args()
 
     cfg = {
@@ -197,6 +210,7 @@ if __name__ == "__main__":
         "model": args.model,
         "api_key": args.api_key,
         "log": not args.no_log,
+        "chunk_size": args.chunk_size,
     }
 
     if not args.edit:

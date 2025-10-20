@@ -67,6 +67,7 @@ def main():
                         "model":    llm.get("model", ""),
                         "log": True,
                         "params": llm.get("params", {}),
+                        "chunk_size": llm.get("chunk_size", "")
                     },
                     editable_files=ed_abs,
                     read_only_files=ro_abs,
