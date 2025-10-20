@@ -105,6 +105,7 @@ def load_config():
             "read_only_expanded": expand_globs(ro_raw, code_dir),
             "editable_expanded":  expand_globs(edit_raw, code_dir),
             "params": llm_params,
+            "chunk_size": (llm.get("chunk_size", "").strip()  if hasattr(llm, "get") else ""),
         },
         "post": {
             "command": (post.get("command", "").strip() if hasattr(post, "get") else ""),
