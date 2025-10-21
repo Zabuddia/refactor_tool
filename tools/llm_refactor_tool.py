@@ -1,4 +1,4 @@
-import re, requests, datetime, sys, json
+import re, requests, datetime, sys, json, time
 from pathlib import Path
 from json import JSONDecodeError
 
@@ -175,33 +175,33 @@ def _post_and_extract(cfg, payload, prompt_for_log, log_name):
                 payload[k] = v
 
     url = base_url + "/chat/completions"
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=120)
-    except requests.RequestException as e:
-        raise RuntimeError(f"[llm] POST error: {e}")
 
-    ct = r.headers.get("Content-Type", "")
-    if not r.ok:
-        body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
-        raise RuntimeError(f"[llm] HTTP {r.status_code} {ct}\n{body_head}")
+    while True:
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=120)
 
-    try:
-        data = r.json()
-    except JSONDecodeError as e:
-        body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
-        raise RuntimeError(f"[llm] JSON decode error: {e}\nContent-Type: {ct}\nBody(head):\n{body_head}")
+            ct = r.headers.get("Content-Type", "")
+            if not r.ok:
+                body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
+                raise RuntimeError(f"[llm] HTTP {r.status_code} {ct}\n{body_head}")
 
-    choices = data.get("choices")
-    if not choices or not isinstance(choices, list):
-        raise RuntimeError(f"[llm] No 'choices' in response. Head: {str(data)[:400]}")
-    msg = choices[0].get("message") or {}
-    reply = msg.get("content")
-    if not reply:
-        raise RuntimeError(f"[llm] Empty content. Head: {str(data)[:400]}")
+            data = r.json()  # may raise JSONDecodeError
 
-    if cfg.get("log", True):
-        _log_conversation(log_name, prompt_for_log, reply)
-    return reply
+            choices = data.get("choices")
+            if not choices or not isinstance(choices, list):
+                raise RuntimeError(f"[llm] No 'choices' in response. Head: {str(data)[:400]}")
+            msg = choices[0].get("message") or {}
+            reply = msg.get("content")
+            if not reply:
+                raise RuntimeError(f"[llm] Empty content. Head: {str(data)[:400]}")
+
+            if cfg.get("log", True):
+                _log_conversation(log_name, prompt_for_log, reply)
+            return reply
+
+        except (requests.RequestException, JSONDecodeError, RuntimeError) as e:
+            print(f"[llm] transient error: {e}\n[llm] retrying in 2s ...")
+            time.sleep(2)
 
 def _call_llm(cfg, filename, code, ro_context):
     prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
