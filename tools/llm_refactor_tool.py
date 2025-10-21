@@ -243,18 +243,26 @@ def _post_and_extract(cfg, payload, prompt_for_log, log_name):
             continue
 
 def _call_llm(cfg, filename, code, ro_context):
-    prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
-    reply = _post_and_extract(cfg, payload, prompt_for_log, str(filename))
-    return _parse_reply(reply)
+    # Keep retrying until we see at least one BEGIN/END block
+    while True:
+        prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
+        reply = _post_and_extract(cfg, payload, prompt_for_log, str(filename))
+        if MARKER_RE.search(reply or ""):
+            return _parse_reply(reply)
+        print("[llm] format error: no <<<BEGIN FILE>>> block; retrying in 2s ...")
+        time.sleep(2)
 
 def _call_llm_multi(cfg, file_names, codes, ro_context):
-    prompt_for_log, payload = _build_request_multi(cfg["model"], file_names, codes, ro_context)
-    log_name = ", ".join(file_names)
-    reply = _post_and_extract(cfg, payload, prompt_for_log, log_name)
-    blocks = _parse_many(reply)
-    if len(blocks) != len(file_names):
-        raise RuntimeError(f"[llm] Expected {len(file_names)} output blocks, got {len(blocks)}.")
-    return blocks
+    # Keep retrying until we get exactly one block per input file (same order)
+    while True:
+        prompt_for_log, payload = _build_request_multi(cfg["model"], file_names, codes, ro_context)
+        log_name = ", ".join(file_names)
+        reply = _post_and_extract(cfg, payload, prompt_for_log, log_name)
+        blocks = _parse_many(reply)
+        if len(blocks) == len(file_names):
+            return blocks
+        print(f"[llm] format error: expected {len(file_names)} blocks, got {len(blocks)}; retrying in 2s ...")
+        time.sleep(2)
 
 def refactor_with_context(cfg, editable_files, read_only_files):
     ro_context = _make_ro_context(read_only_files)
