@@ -152,18 +152,20 @@ def _iter_chunks(items, size):
 
 def _post_and_extract(cfg, payload, prompt_for_log, log_name):
     base_url = cfg["base_url"].rstrip("/")
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if cfg.get("api_key"):
-        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"  # add auth header if provided
+
+    # Quick health check
     try:
         ping_url = base_url + "/models"
         ping_resp = requests.get(ping_url, headers=headers, timeout=10)
         ping_resp.raise_for_status()
-        print("[llm] connected to server, llm is writing...")
+        print("[llm] connected to server")
     except Exception as e:
         raise RuntimeError(f"[llm] failed to connect to server at {base_url}: {e}")
 
-    # merge params (no clobber of required keys)
+    # Merge optional parameters
     if not cfg.get("force_json_mode", False):
         rf = payload.get("response_format")
         if isinstance(rf, dict) and rf.get("type") == "json_object":
@@ -178,30 +180,67 @@ def _post_and_extract(cfg, payload, prompt_for_log, log_name):
 
     while True:
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=120)
+            print("[llm] llm is writing...")
+            # Long timeout to avoid proxy truncation
+            r = requests.post(url, headers=headers, json=payload, timeout=300)
 
             ct = r.headers.get("Content-Type", "")
             if not r.ok:
                 body_head = r.text[:1200] if hasattr(r, "text") else "<no body>"
                 raise RuntimeError(f"[llm] HTTP {r.status_code} {ct}\n{body_head}")
 
-            data = r.json()  # may raise JSONDecodeError
+            # Try parsing JSON
+            try:
+                data = r.json()
+            except JSONDecodeError as e:
+                # Try to salvage BEGIN/END blocks if the proxy cut JSON midstream
+                raw = r.text or ""
+                blocks = MARKER_RE.findall(raw)
+                if blocks:
+                    reply = "\n".join([f"<<<BEGIN FILE>>>\n{b}\n<<<END FILE>>>" for b in blocks])
+                    if cfg.get("log", True):
+                        _log_conversation(log_name, prompt_for_log, reply)
+                    return reply
+                print(f"[llm] JSON decode error: {e}\n[llm] retrying in 2s ...")
+                time.sleep(2)
+                continue
 
             choices = data.get("choices")
             if not choices or not isinstance(choices, list):
+                # Last-chance salvage if server sent partial data
+                raw = r.text or ""
+                blocks = MARKER_RE.findall(raw)
+                if blocks:
+                    reply = "\n".join([f"<<<BEGIN FILE>>>\n{b}\n<<<END FILE>>>" for b in blocks])
+                    if cfg.get("log", True):
+                        _log_conversation(log_name, prompt_for_log, reply)
+                    return reply
                 raise RuntimeError(f"[llm] No 'choices' in response. Head: {str(data)[:400]}")
+
             msg = choices[0].get("message") or {}
             reply = msg.get("content")
             if not reply:
+                raw = r.text or ""
+                blocks = MARKER_RE.findall(raw)
+                if blocks:
+                    reply = "\n".join([f"<<<BEGIN FILE>>>\n{b}\n<<<END FILE>>>" for b in blocks])
+                    if cfg.get("log", True):
+                        _log_conversation(log_name, prompt_for_log, reply)
+                    return reply
                 raise RuntimeError(f"[llm] Empty content. Head: {str(data)[:400]}")
 
             if cfg.get("log", True):
                 _log_conversation(log_name, prompt_for_log, reply)
             return reply
 
+        except (requests.Timeout, requests.ConnectionError) as e:
+            print(f"[llm] timeout or connection error: {e}\n[llm] retrying in 2s ...")
+            time.sleep(2)
+            continue
         except (requests.RequestException, JSONDecodeError, RuntimeError) as e:
             print(f"[llm] transient error: {e}\n[llm] retrying in 2s ...")
             time.sleep(2)
+            continue
 
 def _call_llm(cfg, filename, code, ro_context):
     prompt_for_log, payload = _build_request(cfg["model"], filename, code, ro_context)
